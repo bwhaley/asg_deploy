@@ -1,0 +1,46 @@
+- ec2_elb_lb:
+    name: "{{service}}-{{env}}"
+    region: "{{aws_region}}"
+    state: present
+    subnets: "{{aws_public_subnets}}"
+    security_group_ids: ["{{aws_public_elb_sg}}"]
+    listeners:
+      - protocol: https
+        load_balancer_port: 443
+        instance_protocol: https
+        instance_port: "443"
+        ssl_certificate_id: "{{aws_wildcard_example_com_ssl_arn}}"
+      - protocol: http
+        load_balancer_port: 80
+        instance_protocol: http
+        instance_port: "80"
+    connection_draining_timeout: 60
+    cross_az_load_balancing: "yes"
+    health_check:
+        ping_protocol: https
+        ping_port: "443"
+        ping_path: "/health_check"
+        response_timeout: 5
+        interval: 30
+        unhealthy_threshold: 4
+        healthy_threshold: 2
+  register: aws_elb
+
+- name: Create security group for app instances
+  ec2_group:
+    name: "{{service}}-{{env}}"
+    description: "{{service}}-{{env}} app servers"
+    vpc_id: "{{aws_vpc_id}}"
+    region: "{{aws_region}}"
+    rules: "{{ app_rules | union(global_ssh_rules) }}"
+  register: aws_sg
+
+- name: Tag the security group with a name
+  ec2_tag:
+    resource: "{{aws_sg.group_id}}"
+    region: "{{aws_region}}"
+    state: present
+    tags:
+      Name: "{{service}}-{{env}}"
+      env: "{{env}}"
+      service: "{{service}}"

@@ -1,0 +1,150 @@
+- include_vars: "{{service}}.yml"
+- include_vars: userdata.yml
+
+- name: Get current timestamp (used for naming)
+  command: date +%Y%m%d-%H%M%S
+  register: timestamp
+
+- set_fact: timestamp={{timestamp.stdout}}
+
+- set_fact: health_check_type="ELB"
+  when: elbs is defined
+
+- set_fact: health_check_type="EC2"
+  when: elbs is not defined
+
+- name: Find name of current ASG
+  asg_finder:
+    asg_name_prefix: "{{service}}-{{env}}"
+    region: "{{aws_region}}"
+
+- name: Launch config
+  ec2_lc:
+    name: "{{service}}-{{env}}-{{timestamp}}"
+    instance_profile_name: "{{iam_profile | default(omit)}}"
+    image_id: "{{aws_base_ami}}"
+    key_name: "{{aws_ansible_key_name}}"
+    region: "{{aws_region}}"
+    security_groups: "{{aws_sg.group_id}}"
+    instance_type: "{{instance_type}}"
+    user_data: "{{userdata}}"
+    instance_monitoring: yes
+
+- name: Autoscale group
+  ec2_asg:
+    name: "{{service}}-{{env}}-{{timestamp}}"
+    launch_config_name: "{{service}}-{{env}}-{{timestamp}}"
+    health_check_period: 1200
+    health_check_type: "{{health_check_type}}"
+    replace_all_instances: yes
+    min_size: "{{asg_min_size}}"
+    max_size: "{{asg_max_size}}"
+    desired_capacity: "{{asg_size}}"
+    region: "{{aws_region}}"
+    load_balancers: "{{elbs | default(omit)}}"
+    vpc_zone_identifier: "{{aws_private_subnets[1]}},{{aws_private_subnets[2]}}"
+    wait_timeout: 1200
+    tags:
+      - Name: "{{service}}-{{env}}-{{timestamp}}"
+        propagate_at_launch: yes
+      - service: "{{service}}"
+        propagate_at_launch: yes
+      - env: "{{env}}"
+        propagate_at_launch: yes
+      - release: "{{release}}"
+        propagate_at_launch: yes
+  register: this_asg
+
+- name: Scale Out policy
+  ec2_scaling_policy:
+    state: present
+    region: "{{aws_region}}"
+    name: "{{service}}-{{env}}-ScaleOutPolicy-{{timestamp}}"
+    adjustment_type: "ChangeInCapacity"
+    asg_name: "{{service}}-{{env}}-{{timestamp}}"
+    scaling_adjustment: 1
+    min_adjustment_step: 1
+    cooldown: 60
+  register: so_result
+     
+- name: Scale In policy
+  ec2_scaling_policy:
+    state: present
+    region: "{{aws_region}}"
+    name: "{{service}}-{{env}}-ScaleInPolicy-{{timestamp}}"
+    adjustment_type: "ChangeInCapacity"
+    asg_name: "{{service}}-{{env}}-{{timestamp}}"
+    scaling_adjustment: -1
+    min_adjustment_step: 1
+    cooldown: 60
+  register: si_result
+
+- name: Create cloudwatch CPU alarms for scale out
+  action:
+    module: ec2_metric_alarm
+    state: present
+    region: "{{aws_region}}"
+    name: "{{service}}-{{env}}-CPUScaleOut-{{timestamp}}"
+    metric: "CPUUtilization"
+    namespace: "AWS/EC2"
+    statistic: Average
+    comparison: ">="
+    threshold: 75.0
+    period: 60
+    evaluation_periods: 3
+    unit: "Percent"
+    description: "Scale out when cpu usage is > 75% for 3 periods"
+    dimensions: {'AutoScalingGroupName': "{{ this_asg.name }}"}
+    alarm_actions: ["{{ so_result.arn }}"]
+    
+- name: Create cloudwatch CPU alarms for scale in
+  action:
+    module: ec2_metric_alarm
+    state: present
+    region: "{{aws_region}}"
+    name: "{{service}}-{{env}}-CPUScaleIn-{{timestamp}}"
+    metric: "CPUUtilization"
+    namespace: "AWS/EC2"
+    statistic: Average
+    comparison: ">="
+    threshold: 30.0
+    period: 60
+    evaluation_periods: 3
+    unit: "Percent"
+    description: "Scale in when cpu usage is < 30% for 3 periods"
+    dimensions: {'AutoScalingGroupName': "{{ this_asg.name }}"}
+    ok_actions: ["{{ si_result.arn }}"]
+    
+- name: wait for viable_instances >= asg_size
+  ec2_asg:
+    name: "{{service}}-{{env}}-{{timestamp}}"
+    region: "{{aws_region}}"
+    health_check_type: "{{health_check_type}}"
+    health_check_period: 1200
+  register: this_asg
+  until: this_asg.viable_instances >= asg_size
+  delay: 10
+  retries: 120
+
+- name: wait for instances to become InService in the ELB
+  shell: 'python "{{health_check_script}}" -r {{aws_region}} -a "{{service}}-{{env}}-{{timestamp}}"'
+  register: this_asg
+  until: this_asg.rc == 0
+  delay: 10
+  retries: 120
+  when: health_check_type == "ELB"
+
+- name: Delete the old ASG
+  ec2_asg:
+    name: "{{current_asg_name}}"
+    region: "{{aws_region}}"
+    state: absent
+  when: current_asg_name is defined
+
+- name: Delete the old LC
+  ec2_lc:
+    name: "{{current_lc_name}}"
+    region: "{{aws_region}}"
+    state: absent
+  when: current_lc_name is defined
+

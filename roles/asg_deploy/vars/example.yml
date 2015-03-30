@@ -1,0 +1,3 @@
+iam_profile: 'arn:aws:iam::012345678901:instance-profile/your-app'
+elbs:
+  - "{{aws_elb.elb.name}}"

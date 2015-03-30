@@ -1,0 +1,21 @@
+userdata: |
+  #!/bin/bash -x
+  exec > /tmp/userdata.log 2>&1 
+  
+  # Swap the default user to ansible
+  user=ansible
+  usermod  -l $user ubuntu
+  groupmod -n $user ubuntu
+  usermod  -d /home/$user -m $user
+  if [ -f /etc/sudoers.d/90-cloudimg-ubuntu ]; then
+    mv /etc/sudoers.d/90-cloudimg-ubuntu /etc/sudoers.d/90-cloud-init-users
+  fi
+  sed -i "s/ubuntu/${user}/g" /etc/sudoers.d/90-cloud-init-users
+
+  #Find the IP of this host
+  instance_id=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+  instance_ip=$(hostname -i)
+
+  # Send a deploy object to SQS 
+  /usr/local/bin/aws --region {{aws_region}} sqs send-message --queue-url {{deploy_queue_url}} --message-body '{"service": "{{service}}", "env": "{{env}}", "release": "{{release|default(omit)}}"}' --message-attributes "{\"SenderIp\" : { \"DataType\":\"String\", \"StringValue\":\"${instance_ip}\"}}"
+

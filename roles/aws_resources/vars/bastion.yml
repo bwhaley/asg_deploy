@@ -1,0 +1,9 @@
+bastion_key_name: infrastructure
+bastion_instance_type: m1.small
+iam_profile: Bastion
+ssh_rules:
+  - proto: tcp
+    from_port: 22
+    to_port: 22
+    cidr_ip: "0.0.0.0/0"
+

@@ -1,0 +1,17 @@
+ssh_key_name: somekey
+example_instance_type: m1.small
+iam_profile: example-app
+ssh_rules:
+  - proto: tcp
+    from_port: 22
+    to_port: 22
+    cidr_ip: "{{bastion_sg_id}}"
+app_rules:
+  - proto: tcp
+    from_port: "80"
+    to_port: "80"
+    group_id: "{{aws_public_elb_sg}}"
+  - proto: tcp
+    from_port: "443"
+    to_port: "443"
+    group_id: "{{aws_public_elb_sg}}"

@@ -1,0 +1,17 @@
+- hosts: all
+  tasks:
+    - name: Check for required vars
+      fail: msg="This play requires a variable named {{item}}"
+      when: item is not defined
+      with_items:
+        - service
+        - env
+
+# Creates host groups from CLI parameters
+# Used to control task execution
+- hosts: all
+  tasks:
+    - name: Create dynamic groups from service
+      group_by: key={{service}}
+    - name: Create dynamic groups from env
+      group_by: key={{env}}
